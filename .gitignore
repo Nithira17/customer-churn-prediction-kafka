@@ -1,0 +1,135 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# Artifacts - Model outputs and generated data
+artifacts/data/*
+artifacts/models/*
+artifacts/encode/*
+artifacts/inference_batches/*
+artifacts/mlflow_run_artifacts/*
+artifacts/mlflow_training_artifacts/*
+artifacts/evaluation/*
+artifacts/predictions/*
+
+# Keep directory structure but ignore contents
+!artifacts/data/.gitkeep
+!artifacts/models/.gitkeep
+!artifacts/encode/.gitkeep
+!artifacts/inference_batches/.gitkeep
+!artifacts/mlflow_run_artifacts/.gitkeep
+!artifacts/mlflow_training_artifacts/.gitkeep
+!artifacts/evaluation/.gitkeep
+!artifacts/predictions/.gitkeep
+
+# Data directories
+data/processed/*
+data/raw/*
+!data/processed/.gitkeep
+!data/raw/.gitkeep
+
+# Kafka Runtime
+runtime/kafka-logs/
+runtime/pids/
+runtime/*.log
+*.pid
+
+# Airflow
+.airflow/
+airflow.cfg
+airflow.db
+airflow-webserver.pid
+logs/
+dags/__pycache__/
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Logs
+*.log
+logs/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Environment variables
+.env
+.env.local
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Checkpoints
+artifacts/data/streaming_checkpoints/
+
+# Compiled files
+*.class
+
+# Package files
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Sensitive configuration (if any)
+**/secrets/
+**/credentials/
+config/local_settings.py
