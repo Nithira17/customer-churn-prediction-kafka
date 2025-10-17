@@ -83,34 +83,50 @@ class NativeKafkaValidator:
                                     '/usr/local/opt/kafka/libexec',    # Homebrew on Intel
                                     '/opt/kafka',                       # Common Linux path
                                     '/usr/local/kafka',                 # Alternative Linux path
+                                    'C:\\kafka',                        # Common Windows path
                                     ]
                 
                 for path in common_kafka_paths:
-                    if os.path.exists(os.path.join(path, 'bin', 'kafka-topics.sh')):
+                    # Check for both .sh (Unix) and .bat (Windows) scripts
+                    if os.path.exists(os.path.join(path, 'bin', 'kafka-topics.sh')) or \
+                       os.path.exists(os.path.join(path, 'bin', 'windows', 'kafka-topics.bat')):
                         result['kafka_home_set'] = True
                         logger.info(f"Kafka installation detected at: {path}")
                         # Set KAFKA_HOME for this session
                         os.environ['KAFKA_HOME'] = path
                         # Add Kafka bin to PATH for this session
-                        kafka_bin_path = os.path.join(path, 'bin')
+                        if os.name == 'nt':  # Windows
+                            kafka_bin_path = os.path.join(path, 'bin', 'windows')
+                        else:  # Unix-like
+                            kafka_bin_path = os.path.join(path, 'bin')
                         current_path = os.environ.get('PATH', '')
                         if kafka_bin_path not in current_path:
-                            os.environ['PATH'] = f"{kafka_bin_path}:{current_path}"
+                            os.environ['PATH'] = f"{kafka_bin_path}{os.pathsep}{current_path}"
                             logger.info(f"Added Kafka bin to PATH: {kafka_bin_path}")
                         break
                 
                 if not result['kafka_home_set']:
                     result['error_messages'].append("KAFKA_HOME environment variable not set and Kafka not found in common paths")
-                    logger.warning("❌ Kafka installation not detected")
+                    logger.warning("⚠️ Kafka installation not detected")
             
-            # Check if kafka-topics.sh is available
+            # Check if kafka-topics script is available (Windows uses .bat, Unix uses .sh)
             try:
-                subprocess.run(['kafka-topics.sh', '--version'], 
+                kafka_script = 'kafka-topics.bat' if os.name == 'nt' else 'kafka-topics.sh'
+                subprocess.run([kafka_script, '--version'], 
                              capture_output=True, check=True, timeout=10)
                 result['kafka_binaries_found'] = True
-                logger.info("Kafka binaries found in PATH")
+                logger.info(f"Kafka binaries found in PATH ({kafka_script})")
             except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-                result['error_messages'].append("Kafka binaries not found in PATH")
+                # On Windows, if kafka-topics.bat not in PATH, check KAFKA_HOME directly
+                if os.name == 'nt' and kafka_home:
+                    kafka_bat = os.path.join(kafka_home, 'bin', 'windows', 'kafka-topics.bat')
+                    if os.path.exists(kafka_bat):
+                        result['kafka_binaries_found'] = True
+                        logger.info(f"Kafka binaries found at: {kafka_bat}")
+                    else:
+                        result['error_messages'].append("Kafka binaries not found in PATH or KAFKA_HOME")
+                else:
+                    result['error_messages'].append("Kafka binaries not found in PATH")
             
             # Check Java installation
             try:
@@ -328,11 +344,11 @@ def validate_native_setup() -> Dict[str, Any]:
     # Check broker connection
     broker_running = NativeKafkaValidator.check_kafka_connection()
     
-    # Overall status - focus on what's essential for functionality
-    setup_valid = (
-        installation_status['kafka_binaries_found'] and
-        installation_status['java_available']
-        # Note: broker_running is checked separately as it requires the broker to be started
+    # Overall status - if broker is running, setup is valid
+    # We prioritize broker connectivity over binary detection
+    setup_valid = broker_running or (
+        installation_status.get('kafka_home_set', False) and
+        installation_status.get('java_available', False)
     )
     
     validation_result = {
@@ -348,10 +364,15 @@ def validate_native_setup() -> Dict[str, Any]:
             "Set KAFKA_HOME environment variable to your Kafka installation directory"
         )
     
-    if not installation_status['kafka_binaries_found']:
-        validation_result['recommendations'].append(
-            "Install Apache Kafka natively using: brew install kafka (macOS) or download from https://kafka.apache.org/downloads"
-        )
+    if not installation_status['kafka_binaries_found'] and not broker_running:
+        if os.name == 'nt':  # Windows
+            validation_result['recommendations'].append(
+                "Install Apache Kafka for Windows from https://kafka.apache.org/downloads"
+            )
+        else:
+            validation_result['recommendations'].append(
+                "Install Apache Kafka natively using: brew install kafka (macOS) or download from https://kafka.apache.org/downloads"
+            )
     
     if not installation_status['java_available']:
         validation_result['recommendations'].append(
@@ -360,7 +381,7 @@ def validate_native_setup() -> Dict[str, Any]:
     
     if not broker_running:
         validation_result['recommendations'].append(
-            "Start native Kafka broker using: make kafka-start"
+            "Start native Kafka broker using: make kafka-start-bg"
         )
     
     if setup_valid:
@@ -368,7 +389,7 @@ def validate_native_setup() -> Dict[str, Any]:
             logger.info("✅ Native Kafka setup is valid and broker is running")
         else:
             logger.info("✅ Native Kafka setup is valid (broker not running - this is normal)")
-            logger.info("💡 To start broker: make kafka-format && make kafka-start")
+            logger.info("💡 To start broker: make kafka-start-bg")
     else:
         logger.warning("⚠️ Native Kafka setup has issues")
         for rec in validation_result['recommendations']:

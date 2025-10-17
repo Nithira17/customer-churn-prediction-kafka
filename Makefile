@@ -185,27 +185,52 @@ PID_DIR = runtime\pids
 kafka-format:
 	@echo Formatting native Kafka storage (KRaft mode)...
 	@if not defined KAFKA_HOME (echo ERROR: KAFKA_HOME not set. Please install Kafka natively and set KAFKA_HOME && echo Installation guide: README_KAFKA.md && exit /b 1)
+	@echo Cleaning old Kafka data...
+	@if exist runtime\kafka-logs rmdir /s /q runtime\kafka-logs
 	@echo Creating runtime directories...
 	@if not exist runtime\kafka-logs mkdir runtime\kafka-logs
 	@if not exist runtime\pids mkdir runtime\pids
 	@echo Generating cluster UUID...
-	@for /f %%i in ('%KAFKA_HOME%\bin\windows\kafka-storage.bat random-uuid') do set CLUSTER_ID=%%i
-	@echo Using Cluster ID: %CLUSTER_ID%
-	@%KAFKA_HOME%\bin\windows\kafka-storage.bat format -t %CLUSTER_ID% -c "$(KAFKA_CONF)"
+	@echo @echo off > runtime\format_kafka.bat
+	@echo for /f "tokens=*" %%%%i in ('%KAFKA_HOME%\bin\windows\kafka-storage.bat random-uuid') do set CLUSTER_ID=%%%%i >> runtime\format_kafka.bat
+	@echo echo Using Cluster ID: %%CLUSTER_ID%% >> runtime\format_kafka.bat
+	@echo %KAFKA_HOME%\bin\windows\kafka-storage.bat format -t %%CLUSTER_ID%% -c $(KAFKA_CONF) >> runtime\format_kafka.bat
+	@runtime\format_kafka.bat
+	@del runtime\format_kafka.bat
 	@echo Native Kafka storage formatted successfully
 
 kafka-start-bg:
 	@echo Starting native Kafka broker in background...
 	@if not defined KAFKA_HOME (echo ERROR: KAFKA_HOME not set && exit /b 1)
-	@if not exist $(PID_DIR) mkdir $(PID_DIR)
-	@start /B "" %KAFKA_HOME%\bin\windows\kafka-server-start.bat "$(KAFKA_CONF)" > runtime\kafka.log 2>&1
+	@echo Creating directories...
+	@if not exist runtime mkdir runtime
+	@if not exist runtime\pids mkdir runtime\pids
+	@echo Creating Kafka startup batch file...
+	@echo @echo off > runtime\start_kafka_direct.bat
+	@echo set "PROJECT_DIR=%cd%" >> runtime\start_kafka_direct.bat
+	@echo cd /d "%%PROJECT_DIR%%" >> runtime\start_kafka_direct.bat
+	@echo set "KAFKA_LOG=%%PROJECT_DIR%%\runtime\kafka.log" >> runtime\start_kafka_direct.bat
+	@echo set "KAFKA_CONF=%%PROJECT_DIR%%\kafka\server.properties" >> runtime\start_kafka_direct.bat
+	@echo echo Starting Kafka... ^> "%%KAFKA_LOG%%" >> runtime\start_kafka_direct.bat
+	@echo echo Kafka Home: %KAFKA_HOME% ^>^> "%%KAFKA_LOG%%" >> runtime\start_kafka_direct.bat
+	@echo echo Project Dir: %%PROJECT_DIR%% ^>^> "%%KAFKA_LOG%%" >> runtime\start_kafka_direct.bat
+	@echo echo Config: %%KAFKA_CONF%% ^>^> "%%KAFKA_LOG%%" >> runtime\start_kafka_direct.bat
+	@echo echo. ^>^> "%%KAFKA_LOG%%" >> runtime\start_kafka_direct.bat
+	@echo call "%KAFKA_HOME%\bin\windows\kafka-server-start.bat" "%%KAFKA_CONF%%" ^>^> "%%KAFKA_LOG%%" 2^>^&1 >> runtime\start_kafka_direct.bat
+	@echo Starting Kafka in background...
+	@powershell -Command "$$dir = Get-Location; Start-Process -FilePath \"$$dir\runtime\start_kafka_direct.bat\" -WindowStyle Minimized -WorkingDirectory \"$$dir\""
+	@timeout /t 3 /nobreak >nul
 	@echo Kafka broker started in background
-	@echo Logs: runtime\kafka.log
+	@echo.
+	@echo Wait 15-20 seconds for Kafka to fully start
+	@echo Then check status: make kafka-status
+	@echo View real logs: type runtime\kafka.log
 
 kafka-stop:
 	@echo Stopping native Kafka broker...
 	@if not defined KAFKA_HOME (echo ERROR: KAFKA_HOME not set && exit /b 1)
-	@%KAFKA_HOME%\bin\windows\kafka-server-stop.bat
+	@cmd /c "%KAFKA_HOME%\bin\windows\kafka-server-stop.bat"
+	@timeout /t 2 /nobreak >nul
 	@taskkill /F /IM java.exe 2>nul || echo No Kafka processes found
 	@echo Kafka broker stopped
 
@@ -246,7 +271,77 @@ kafka-consumer-continuous:
 
 kafka-check:
 	@echo Checking native Kafka broker status...
-	@kafka-topics.bat --bootstrap-server localhost:9092 --list >nul 2>&1 && (echo Native Kafka broker is running at localhost:9092 && echo Available topics: && kafka-topics.bat --bootstrap-server localhost:9092 --list) || (echo ERROR: Cannot connect to native Kafka broker at localhost:9092 && echo Please start with 'make kafka-start-bg')
+	@echo.
+	@echo Checking if Kafka process is running...
+	@tasklist /FI "IMAGENAME eq java.exe" | findstr java >nul && (echo [OK] Java process found) || (echo [ERROR] No Java process found - Kafka might not be running)
+	@echo.
+	@echo Checking port 9092...
+	@netstat -an | findstr :9092 >nul && (echo [OK] Port 9092 is listening) || (echo [ERROR] Port 9092 is not listening)
+	@echo.
+	@echo Checking Kafka configuration...
+	@if exist kafka\server.properties (echo [OK] Configuration file exists && echo Listeners config: && type kafka\server.properties | findstr /C:"listeners" /C:"PLAINTEXT" && echo Log directory: && type kafka\server.properties | findstr "log.dirs") else (echo [ERROR] kafka\server.properties not found)
+	@echo.
+	@echo Checking Kafka logs for errors...
+	@if exist runtime\kafka.log (echo Last 15 lines of log: && powershell -Command "Get-Content '.\runtime\kafka.log' -Tail 15 -ErrorAction SilentlyContinue") else (echo [WARNING] No kafka.log file found)
+	@echo.
+	@echo Testing connection to broker...
+	@kafka-topics.bat --bootstrap-server localhost:9092 --list --request-timeout-ms 5000 >nul 2>&1 && (echo [OK] Successfully connected to Kafka broker && echo. && echo Available topics: && kafka-topics.bat --bootstrap-server localhost:9092 --list) || (echo [ERROR] Cannot connect to Kafka broker at localhost:9092 && echo. && echo Next steps: && echo   1. Check full log: type runtime\kafka.log && echo   2. Verify config: type kafka\server.properties && echo   3. Restart: make kafka-stop ^&^& make kafka-format ^&^& make kafka-start-bg)
+
+kafka-find-logs:
+	@echo Searching for Kafka log files...
+	@echo ================================
+	@echo.
+	@echo Checking project runtime directory:
+	@if exist runtime\kafka.log (echo Found: runtime\kafka.log && echo Size: && dir runtime\kafka.log | findstr kafka.log) else (echo Not found in runtime\)
+	@echo.
+	@echo Checking KAFKA_HOME logs directory:
+	@if exist "%KAFKA_HOME%\logs" (echo Found KAFKA_HOME\logs directory && dir "%KAFKA_HOME%\logs" /B) else (echo KAFKA_HOME\logs not found)
+	@echo.
+	@echo Checking for kafka-logs in runtime:
+	@if exist runtime\kafka-logs (echo Found: runtime\kafka-logs && dir runtime\kafka-logs /s /b | findstr "\.log$") else (echo runtime\kafka-logs not found)
+	@echo.
+	@echo Checking Windows TEMP for Kafka logs:
+	@dir "%TEMP%" /b 2>nul | findstr /i kafka || echo No kafka files in TEMP
+	@echo.
+	@echo TIP: Kafka might be logging to console. Check if a CMD window with Kafka is open.
+
+kafka-test-log-read:
+	@echo Testing log file access...
+	@echo ==========================
+	@powershell -Command "$content = [IO.File]::ReadAllText('runtime\kafka.log'); Write-Host $content"
+	@echo Viewing Kafka Log
+	@echo ==================
+	@if exist runtime\kafka.log (more < runtime\kafka.log) else (echo Log file not found)
+
+kafka-log-info:
+	@echo Kafka Log File Information
+	@echo ==========================
+	@powershell -Command "if (Test-Path 'runtime\kafka.log') { Get-Item 'runtime\kafka.log' | Select-Object FullName, Length, LastWriteTime, Attributes } else { Write-Host 'Log file not found' }"
+	@echo Checking Kafka Configuration
+	@echo =============================
+	@echo.
+	@if exist kafka\server.properties (type kafka\server.properties | findstr /V "^#" | findstr /V "^$") else (echo ERROR: kafka\server.properties not found)
+	@echo.
+	@echo Key settings to verify:
+	@echo - listeners should be: PLAINTEXT://localhost:9092
+	@echo - log.dirs should point to: runtime/kafka-logs or runtime\kafka-logs
+
+kafka-status:
+	@echo Kafka Broker Status Check
+	@echo =========================
+	@echo.
+	@echo Java Processes:
+	@tasklist /FI "IMAGENAME eq java.exe" 2>nul || echo No Java processes found
+	@echo.
+	@echo Network Connections (Port 9092):
+	@netstat -an | findstr :9092 || echo Port 9092 is not in use
+	@echo.
+	@echo Last 30 lines of Kafka log:
+	@if exist runtime\kafka.log (powershell -Command "Get-Content -Path 'runtime\kafka.log' -Tail 30 -ErrorAction SilentlyContinue") else (echo No kafka.log file found)
+	@echo.
+	@echo =============================
+	@echo TIP: View full log with: powershell Get-Content runtime\kafka.log
+	@echo TIP: Check if Kafka is ready: make kafka-check
 
 kafka-sample-scored:
 	@echo Analyzing churn prediction results...
@@ -314,13 +409,21 @@ kafka-help:
 	@echo   kafka-consumer-continuous - Start continuous ML consumer
 	@echo.
 	@echo Monitoring Commands:
-	@echo   kafka-check      - Check broker status
+	@echo   kafka-check      - Check broker status (detailed)
+	@echo   kafka-status     - Quick status check with logs
 	@echo   kafka-monitor    - Monitor cluster health
 	@echo   kafka-sample-scored - Show prediction analytics and statistics
 	@echo.
 	@echo Utility Commands:
 	@echo   kafka-reset      - Reset all Kafka data
 	@echo   kafka-help       - Show this help
+	@echo.
+	@echo Troubleshooting:
+	@echo   If topics fail to create (timeout):
+	@echo     1. make kafka-status    (check if running)
+	@echo     2. type runtime\kafka.log (check for errors)
+	@echo     3. make kafka-stop ^&^& make kafka-format ^&^& make kafka-start-bg
+	@echo     4. Wait 15-20 seconds before creating topics
 	@echo.
 	@echo For detailed setup: README_KAFKA.md
 
@@ -332,7 +435,7 @@ kafka-help:
 sync-dags-to-wsl:
 	@echo Syncing DAGs from Windows to WSL2...
 	@wsl -d Ubuntu mkdir -p ~/airflow-class/.airflow/dags/
-	@if exist dags for %%f in (dags\*.py) do wsl -d Ubuntu cp "/mnt/c/Users/hewaj/Desktop/Zuu Crew/Customer Churn Prediction - Kafka/dags/%%~nxf" "~/airflow-class/.airflow/dags/"
+	@if exist dags for %%f in (dags\*.py) do wsl -d Ubuntu cp "/mnt/c/Users/%USERNAME%/path/to/project/dags/%%~nxf" "~/airflow-class/.airflow/dags/"
 	@echo DAGs synced successfully!
 	@echo Access Airflow UI at: http://localhost:8080
 

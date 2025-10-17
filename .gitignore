@@ -58,6 +58,7 @@ data/raw/*
 !data/raw/.gitkeep
 
 # Kafka Runtime
+runtime/
 runtime/kafka-logs/
 runtime/pids/
 runtime/*.log
